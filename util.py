@@ -1,18 +1,97 @@
 import os
 import sys
 import requests
-
 import argparse
-
 import numpy as np
 import torch
 import torch.nn as nn
+
+import scvi
 
 import pyro
 import pyro.distributions as dist
 from pyro.infer import SVI, JitTrace_ELBO, Trace_ELBO
 from pyro.optim import Adam
 
+
+import anndata
+from torch.utils.data import DataLoader
+from typing import Optional, Union
+
+
+
+# helps loading tensors from AnnData objects 
+class AnnDataLoader(DataLoader):
+    """
+    DataLoader for loading tensors from AnnData objects.
+
+    Parameters
+    ----------
+    adata
+        An anndata objects
+    shuffle
+        Whether the data should be shuffled
+    indices
+        The indices of the observations in the adata to load
+    batch_size
+        minibatch size to load each iteration
+    data_and_attributes
+        Dictionary with keys representing keys in data registry (`adata.uns["_scvi"]`)
+        and value equal to desired numpy loading type (later made into torch tensor).
+        If `None`, defaults to all registered data.
+    data_loader_kwargs
+        Keyword arguments for :class:`~torch.utils.data.DataLoader`
+    """
+
+    def __init__(
+        self,
+        adata: anndata.AnnData,
+        shuffle=False,
+        indices=None,
+        batch_size=128,
+        data_and_attributes: Optional[dict] = None,
+        drop_last: Union[bool, int] = False,
+        **data_loader_kwargs,
+    ):
+
+        if "_scvi" not in adata.uns.keys():
+            raise ValueError("Please run setup_anndata() on your anndata object first.")
+
+        if data_and_attributes is not None:
+            data_registry = adata.uns["_scvi"]["data_registry"]
+            for key in data_and_attributes.keys():
+                if key not in data_registry.keys():
+                    raise ValueError(
+                        "{} required for model but not included when setup_anndata was run".format(
+                            key
+                        )
+                    )
+
+        self.dataset = AnnTorchDataset(adata, getitem_tensors=data_and_attributes)
+
+        sampler_kwargs = {
+            "batch_size": batch_size,
+            "shuffle": shuffle,
+            "drop_last": drop_last,
+        }
+
+        if indices is None:
+            indices = np.arange(len(self.dataset))
+            sampler_kwargs["indices"] = indices
+        else:
+            if hasattr(indices, "dtype") and indices.dtype is np.dtype("bool"):
+                indices = np.where(indices)[0].ravel()
+            indices = np.asarray(indices)
+            sampler_kwargs["indices"] = indices
+
+        self.indices = indices
+        self.sampler_kwargs = sampler_kwargs
+        sampler = BatchSampler(**self.sampler_kwargs)
+        self.data_loader_kwargs = copy.copy(data_loader_kwargs)
+        # do not touch batch size here, sampler gives batched indices
+        self.data_loader_kwargs.update({"sampler": sampler, "batch_size": None})
+
+        super().__init__(self.dataset, **self.data_loader_kwargs)
 
 # define the PyTorch module that parameterizes the
 # diagonal gaussian distribution q(z|x)
