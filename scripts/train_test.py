@@ -16,6 +16,9 @@ def train_test(gex,peaks,train_percent=0.70):
     training_set_samples = random.sample(samples_indices,int(train_percent*float(len(samples_indices))))
     test_set_samples = [s for s in samples_indices if s not in training_set_samples]
 
+    # since we are trying to establish a link between ATAC-seq peaks and mRNA expression data
+    # peaks and gex have an input output correspondence in our framework!!!
+
     train_gex = gex[gex.obs.index.isin(training_set_samples)].copy()
     train_peaks = peaks[peaks.obs.index.isin(training_set_samples)].copy()
 
